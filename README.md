@@ -1,7 +1,6 @@
 # EYEMECH ε3.2 ESP32 Controller
 
-![EYEMECH Banner](https://raw.githubusercontent.com/username/eyemech-esp32/main/images/banner.png)
-https://www.youtube.com/watch?v=MeHLouL9ltw
+[![EYEMECH ε3.2 Demo](https://img.youtube.com/vi/MeHLouL9ltw/0.jpg)](https://www.youtube.com/watch?v=MeHLouL9ltw "EYEMECH ε3.2 Demo - Click to Watch!")
 
 ## Overview
 
