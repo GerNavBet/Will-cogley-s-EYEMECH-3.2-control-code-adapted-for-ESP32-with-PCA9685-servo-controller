@@ -1,5 +1,5 @@
 """
-EYEMECH ε3.1 control code adapted for ESP32 with PCA9685 servo controller
+EYEMECH ε3.2 control code adapted for ESP32 with PCA9685 servo controller
 Based on Will Cogley's Eye Mechanism control code
 """
 
