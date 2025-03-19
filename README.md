@@ -22,9 +22,9 @@ EYEMECH ε3.2 is an adaptation of Will Cogley's Eye Mechanism control code for t
   - Left/Right movement (1)
   - Up/Down movement (1)
   - Eyelids (4 - Top Left, Bottom Left, Top Right, Bottom Right)
-- 2 Potentiometers (for joystick control)
+- 1 PS4/PS5 Koystick module (for joystick control)
 - 1 Trim potentiometer (for eye openness)
-- Mode switch, Enable switch, and Blink button
+- Mode switch, Enable switch, and Blink button (Mode & Enable swichtes can be joined using a 2 way Switch)
 - 5V-6V power supply for servos
 
 ## Wiring Diagram
@@ -42,8 +42,8 @@ ESP32 Inputs:
 GPIO14      <------- Mode Switch
 GPIO13      <------- Enable Switch
 GPIO15      <------- Blink Button
-GPIO34      <------- Up/Down Potentiometer
-GPIO32      <------- Left/Right Potentiometer
+GPIO34      <------- Up/Down Joystick
+GPIO32      <------- Left/Right Joystick
 GPIO35      <------- Trim Potentiometer
 
 PCA9685 Outputs:
