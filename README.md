@@ -1,6 +1,9 @@
 # EYEMECH ε3.2 control code adapted for ESP32 with PCA9685 servo controller
 Based on Will Cogley's Eye Mechanism control code
 
+![Auto Mode](assets/GIF_20250330_145529_110-ezgif.com-resize.gif)
+![Manual Mode](assets/GIF_20250330_145738_084-ezgif.com-resize.gif)
+
 
 [![EYEMECH ε3.2 Demo](https://img.youtube.com/vi/MeHLouL9ltw/0.jpg)](https://www.youtube.com/watch?v=MeHLouL9ltw "EYEMECH ε3.2 Demo - Click to Watch!")
 
