@@ -1,12 +1,13 @@
 """
-EYEMECH ε3.2 control code adapted for ESP32 with PCA9685 servo controller
+EYEMECH ε3.2 control code adapted for ESP32 with PCA9685 servo controller and OLED display
 Based on Will Cogley's Eye Mechanism control code
 """
 
 import time
 from machine import Pin, I2C, ADC
 import random
-import sys  # Added for tracking initialization state
+import sys
+import ssd1306  # Import SSD1306 library for OLED
 
 # PCA9685 constants
 PCA9685_ADDRESS = 0x40
@@ -45,7 +46,17 @@ servo_limits = {
    "TR": (10, 90),   # Top Right eyelid
    "BR": (90, 10),   # Bottom Right eyelid (inverted)
 } 
-    
+
+# System modes for display and tracking
+CALIBRATION_MODE = 0
+AUTO_MODE = 1
+CONTROLLER_MODE = 2
+current_mode = AUTO_MODE  # Default mode
+
+# OLED Display setup
+# Initialize I2C for OLED (using the same I2C bus as PCA9685)
+# We'll initialize this after the main I2C setup
+
 class PCA9685:
     def __init__(self, i2c, address=PCA9685_ADDRESS):
         self.i2c = i2c
@@ -96,6 +107,22 @@ i2c = I2C(0, scl=Pin(22), sda=Pin(21), freq=100000)
 pca = PCA9685(i2c)
 pca.set_pwm_freq(50)  # 50Hz is standard for servos
 
+# Initialize OLED Display
+oled_width = 128
+oled_height = 64
+oled = ssd1306.SSD1306_I2C(oled_width, oled_height, i2c, addr=0x3C)
+
+# Performance tracking variables
+start_time = time.ticks_ms()
+frame_count = 0
+fps = 0
+last_fps_update = 0
+system_uptime = 0
+
+# Movement tracking for heatmap
+position_history = []
+max_history = 100  # Store last 100 positions
+
 # Set up the switches and potentiometers on ESP32
 enable = Pin(13, Pin.IN, Pin.PULL_UP)
 mode = Pin(14, Pin.IN, Pin.PULL_UP)
@@ -109,13 +136,138 @@ trim.atten(ADC.ATTN_11DB)
 LR = ADC(Pin(32))
 LR.atten(ADC.ATTN_11DB)
 
-#Variables to track eye position and limit movement speed
+# Variables to track eye position and limit movement speed
 last_lr_angle = 90
 last_ud_angle = 90
 max_speed = 5  # Maximum degrees change per cycle
+blink_count = 0  # Track total blinks
+input_values = {"LR": 0, "UD": 0, "TRIM": 0}  # Track input values
+eye_openness = 100  # Current eye openness percentage
+
+# OLED Display functions
+def update_display(mode_name, lr_angle, ud_angle, is_blinking, openness):
+    """Update OLED display with current system state"""
+    global frame_count, fps, last_fps_update, system_uptime, position_history
+    
+    # Calculate FPS every second
+    current_time = time.ticks_ms()
+    frame_count += 1
+    if current_time - last_fps_update > 1000:
+        fps = frame_count
+        frame_count = 0
+        last_fps_update = current_time
+        system_uptime = (current_time - start_time) // 1000  # in seconds
+    
+    # Add current position to history
+    if len(position_history) >= max_history:
+        position_history.pop(0)
+    position_history.append((lr_angle, ud_angle))
+    
+    # Clear the display
+    oled.fill(0)
+    
+    # Draw header with mode and FPS
+    oled.text(f"MODE: {mode_name}", 0, 0)
+    oled.text(f"FPS:{fps} UP:{system_uptime//60}m", 0, 10)
+    
+    # Draw eye position values
+    oled.text(f"X:{lr_angle} Y:{ud_angle}", 0, 20)
+    
+    # Draw blink indicator and openness
+    blink_status = "BLINK" if is_blinking else "     "
+    oled.text(f"{blink_status} O:{int(openness)}%", 0, 30)
+    
+    # Draw simple eye visualization
+    eye_x, eye_y = 96, 20
+    eye_size = 18
+    
+    # Draw eye outline
+    oled.ellipse(eye_x, eye_y, eye_size, int(eye_size * 0.7), 1)
+    
+    # Draw pupil (scaled from servo positions)
+    pupil_x = eye_x + int((lr_angle - 90) / 50 * (eye_size-5))  # Scale for more visible movement
+    pupil_y = eye_y + int((ud_angle - 90) / 50 * (eye_size-8))
+    
+    # If blinking, show eye closed or partially closed
+    if is_blinking:
+        # Draw closed eye (horizontal line)
+        oled.line(eye_x - eye_size, eye_y, eye_x + eye_size, eye_y, 1)
+    else:
+        # Draw pupil as filled circle
+        oled.fill_circle(pupil_x, pupil_y, 3, 1)
+    
+    # Draw a mini position heatmap in bottom right
+    heatmap_size = 32
+    heatmap_x = 96
+    heatmap_y = 40
+    
+    # Draw heatmap border
+    oled.rect(heatmap_x - heatmap_size//2, heatmap_y - heatmap_size//2, 
+              heatmap_size, heatmap_size, 1)
+    
+    # Draw center crosshair
+    oled.line(heatmap_x - 2, heatmap_y, heatmap_x + 2, heatmap_y, 1)
+    oled.line(heatmap_x, heatmap_y - 2, heatmap_x, heatmap_y + 2, 1)
+    
+    # Plot position history points
+    for pos in position_history:
+        px = heatmap_x + int((pos[0] - 90) / 50 * (heatmap_size//2))
+        py = heatmap_y + int((pos[1] - 90) / 50 * (heatmap_size//2))
+        oled.pixel(px, py, 1)
+    
+    # Draw input visualization
+    oled.text("INPUT:", 0, 40)
+    # Show input values as small bar graphs
+    bar_width = 30
+    oled.text("LR", 0, 50)
+    oled.rect(15, 50, bar_width, 6, 1)
+    oled.fill_rect(15, 50, int(bar_width * (input_values["LR"]-1000)/3000), 6, 1)
+    
+    oled.text("UD", 50, 50)
+    oled.rect(65, 50, bar_width, 6, 1)
+    oled.fill_rect(65, 50, int(bar_width * (input_values["UD"]-1000)/3000), 6, 1)
+    
+    # Bottom status line
+    oled.text(f"Blinks:{blink_count}", 0, 56)
+    
+    # Update the display
+    oled.show()
+
+# Helper functions for OLED drawing
+def fill_circle(oled, x0, y0, radius, c):
+    """Draw a filled circle"""
+    f = 1 - radius
+    ddF_x = 1
+    ddF_y = -2 * radius
+    x = 0
+    y = radius
+    
+    # Draw horizontal lines across the circle to fill it
+    oled.hline(x0, y0, 1, c)  # Center point
+    for dy in range(1, radius + 1):
+        # Calculate width at this height using circle equation
+        dx = int((radius * radius - dy * dy) ** 0.5)
+        oled.hline(x0 - dx, y0 + dy, dx * 2 + 1, c)  # Bottom half
+        oled.hline(x0 - dx, y0 - dy, dx * 2 + 1, c)  # Top half
+
+# Add method to the SSD1306 class for filled circles
+ssd1306.SSD1306_I2C.fill_circle = fill_circle
+
+# Function to display splash screen at startup
+def show_splash_screen():
+    oled.fill(0)
+    oled.text("EYEMECH e3.2", 20, 10)
+    oled.text("FabriKit3D", 22, 25)
+    oled.text("Eye Mechanism", 18, 35)
+    oled.text("ESP32 Edition", 20, 45)
+    oled.show()
+    time.sleep(2)
 
 # Set all servos to central position for assembly
 def calibrate():
+    global current_mode
+    current_mode = CALIBRATION_MODE
+    
     # Center the eye movement servos
     pca.set_servo_angle(SERVO_CHANNELS["LR"], 90)
     pca.set_servo_angle(SERVO_CHANNELS["UD"], 90)
@@ -128,6 +280,9 @@ def calibrate():
 
 # Initialize controller mode - eyes centered, eyelids open
 def initialize_controller_mode():
+    global current_mode
+    current_mode = CONTROLLER_MODE
+    
     # Center the eye movement servos
     pca.set_servo_angle(SERVO_CHANNELS["LR"], 90)
     pca.set_servo_angle(SERVO_CHANNELS["UD"], 90)
@@ -153,6 +308,11 @@ def neutral():
 
 # Corrected blink function - should CLOSE the eyes
 def blink():
+    global blink_count
+    
+    # Increment blink counter
+    blink_count += 1
+    
     # Close all eyelids (meeting in the middle)
     pca.set_servo_angle(SERVO_CHANNELS["TL"], servo_limits["TL"][0])  # CLOSED position
     pca.set_servo_angle(SERVO_CHANNELS["BL"], servo_limits["BL"][0])  # CLOSED position
@@ -249,6 +409,8 @@ def control_ud_and_lids(ud_angle):
     """
     Improved function to move UD servo and make eyelids follow based on UD's position
     """
+    global eye_openness
+    
     # Get limits
     ud_min, ud_max = servo_limits["UD"]
     tl_min, tl_max = servo_limits["TL"]  # min=closed, max=open for TL
@@ -271,6 +433,11 @@ def control_ud_and_lids(ud_angle):
     tr_target = tr_min + (tr_max - tr_min) * (1 - top_close_factor)
     bl_target = bl_min + (bl_max - bl_min) * (1 - bottom_close_factor)
     br_target = br_min + (br_max - br_min) * (1 - bottom_close_factor)
+    
+    # Calculate approximate eye openness percentage
+    # Average the openness factors, invert (since 0 is closed, 1 is open)
+    openness_factor = 1 - ((top_close_factor + bottom_close_factor) / 2)
+    eye_openness = int(openness_factor * 100)
    
     # Move all servos
     pca.set_servo_angle(SERVO_CHANNELS["UD"], ud_angle)
@@ -311,13 +478,12 @@ def update_eyelid_limits(trim_value):
     servo_limits["BR"] = (90, BR_range[0] + (BR_range[1] - BR_range[0]) * (1-trim_progress))
     servo_limits["BL"] = (10, BL_range[0] + (BL_range[1] - BL_range[0]) * trim_progress)
     servo_limits["TR"] = (10, TR_range[0] + (TR_range[1] - TR_range[0]) * trim_progress)
-    
-    # For debugging
-    print(f"Trim: {trim_value}, Progress: {trim_progress}")
-    print(f"Limits: TL:{servo_limits['TL']}, TR:{servo_limits['TR']}, BL:{servo_limits['BL']}, BR:{servo_limits['BR']}")
 
 # Initialize PCA9685
 print("Initializing servos...")
+# Show splash screen
+show_splash_screen()
+
 calibrate()
 time.sleep_ms(1000)
 print("System ready")
@@ -325,38 +491,64 @@ print("System ready")
 # Flag to track if controller mode has been initialized
 controller_initialized = False
 
+# Mode names for display
+mode_names = ["CALIBRATION", "AUTO", "CONTROLLER"]
+
+# Track display update timing
+last_display_update = 0
+display_update_interval = 50  # Update display every 50ms (20 FPS target)
+
 # Main loop
 while True:
     mode_state = not mode.value()
     enable_state = not enable.value()
+    current_time = time.ticks_ms()
+    
+    # Track current mode for display
+    is_blinking = False
     
     if mode_state == 1:  # Calibration mode when switch is in hold position
+        current_mode = CALIBRATION_MODE
         calibrate()
         time.sleep_ms(500)
         # Reset controller initialization flag when exiting controller mode
         controller_initialized = False
     else:
         if enable_state == 0:  # Auto mode
+            current_mode = AUTO_MODE
             # Reset controller initialization flag when exiting controller mode
             controller_initialized = False
             
             command = random.randint(0, 2)
             if command == 0:
                 blink()
+                is_blinking = True
                 time.sleep_ms(100)
                 neutral()  # Return to neutral after blinking
                 time.sleep_ms(random.randint(1000, 3000))
             elif command == 1:
                 blink()
+                is_blinking = True
                 time.sleep_ms(100)
-                control_ud_and_lids(random.randint(servo_limits["UD"][0], servo_limits["UD"][1]))
-                pca.set_servo_angle(SERVO_CHANNELS["LR"], random.randint(servo_limits["LR"][0], servo_limits["LR"][1]))
+                ud_angle = random.randint(servo_limits["UD"][0], servo_limits["UD"][1])
+                lr_angle = random.randint(servo_limits["LR"][0], servo_limits["LR"][1])
+                control_ud_and_lids(ud_angle)
+                pca.set_servo_angle(SERVO_CHANNELS["LR"], lr_angle)
+                # Store for display
+                last_lr_angle = lr_angle
+                last_ud_angle = ud_angle
                 time.sleep_ms(random.randint(300, 1000))
             elif command == 2:
-                control_ud_and_lids(random.randint(servo_limits["UD"][0], servo_limits["UD"][1]))
-                pca.set_servo_angle(SERVO_CHANNELS["LR"], random.randint(servo_limits["LR"][0], servo_limits["LR"][1]))
+                ud_angle = random.randint(servo_limits["UD"][0], servo_limits["UD"][1])
+                lr_angle = random.randint(servo_limits["LR"][0], servo_limits["LR"][1])
+                control_ud_and_lids(ud_angle)
+                pca.set_servo_angle(SERVO_CHANNELS["LR"], lr_angle)
+                # Store for display
+                last_lr_angle = lr_angle
+                last_ud_angle = ud_angle
                 time.sleep_ms(random.randint(200, 400))
         elif enable_state == 1:  # Controller mode
+            current_mode = CONTROLLER_MODE
             # Initialize controller mode first time
             if not controller_initialized:
                 initialize_controller_mode()
@@ -367,11 +559,17 @@ while True:
             trim_value = trim.read()
             LR_value = LR.read()
             blink_state = not blink_pin.value()
+            
+            # Store values for display
+            input_values["LR"] = LR_value
+            input_values["UD"] = UD_value
+            input_values["TRIM"] = trim_value
     
             update_eyelid_limits(trim_value)
             
             if blink_state == 0:  # Button pressed - blink (close eyes)
                 blink()
+                is_blinking = True
             else:
                 # Normal operation - move eyes according to joystick
                 target_lr_angle = scale_controller_potentiometer(LR_value, "LR")
@@ -397,4 +595,8 @@ while True:
                 control_ud_and_lids(ud_angle)
                 
             time.sleep_ms(10)
-            print(f"LR: {LR.read()}, UD: {UD.read()}")
+    
+    # Update the display at regular intervals to maintain performance
+    if time.ticks_diff(current_time, last_display_update) > display_update_interval:
+        update_display(mode_names[current_mode], last_lr_angle, last_ud_angle, is_blinking, eye_openness)
+        last_display_update = current_time
